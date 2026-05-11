@@ -223,20 +223,22 @@ app.get("/matches", (req, res) => {
     SELECT
       m.id,
       CONCAT('Trận #', m.id) AS title,
-      f.field_name AS location,
+      COALESCE(f.field_name, 'Chưa xác định') AS location,
       CONCAT(
-        DATE_FORMAT(b.booking_date, '%Y-%m-%d'),
+        DATE_FORMAT(COALESCE(b.booking_date, m.match_date), '%Y-%m-%d'),
         ' ',
-        TIME_FORMAT(b.start_time, '%H:%i')
+        TIME_FORMAT(COALESCE(b.start_time, '00:00:00'), '%H:%i')
       ) AS time,
-      10 AS max_players,
+      COALESCE(m.max_players, 10) AS max_players,
+      COALESCE(m.status, 'open') AS status,
       m.match_date,
       m.team1_id,
       m.team2_id,
-      m.booking_id
+      m.booking_id,
+      (SELECT COUNT(*) FROM match_players mp WHERE mp.match_id = m.id) AS current_players
     FROM matches m
     LEFT JOIN booking b ON m.booking_id = b.id
-    LEFT JOIN fields f ON b.field_id = f.id
+    LEFT JOIN fields  f ON b.field_id   = f.id
     ORDER BY m.id DESC
   `;
 
@@ -362,9 +364,24 @@ app.post("/join", authenticateToken, (req, res) => {
                 return res.status(500).json({ message: "Không thể tham gia trận đấu" });
               }
 
+              // Kiểm tra nếu đủ người → đổi status sang "full"
+              const newCount = currentPlayers + 1;
+              if (newCount >= maxPlayers) {
+                db.query(
+                  `UPDATE matches SET status = 'full' WHERE id = ?`,
+                  [match_id],
+                  (updateErr) => {
+                    if (updateErr) console.log("Lỗi cập nhật status match full:", updateErr);
+                  }
+                );
+              }
+
               res.json({
-                message: "Joined match successfully",
+                message: "Tham gia trận thành công!",
                 id: result.insertId,
+                currentPlayers: newCount,
+                maxPlayers,
+                isFull: newCount >= maxPlayers,
               });
             });
           });
@@ -401,13 +418,16 @@ app.get("/match/:id/players", (req, res) => {
 // ===== LẤY DANH SÁCH SÂN =====
 app.get("/fields", (req, res) => {
   const sql = `
-    SELECT 
+    SELECT
       id,
       field_name AS name,
       price_per_hour AS price,
       status,
-      'TP.HCM' AS location
+      COALESCE(location, 'TP.HCM') AS location,
+      description,
+      field_type
     FROM fields
+    ORDER BY id ASC
   `;
 
   db.query(sql, (err, result) => {
@@ -424,12 +444,14 @@ app.get("/fields/:id", (req, res) => {
   const fieldId = req.params.id;
 
   const sql = `
-    SELECT 
+    SELECT
       id,
       field_name AS name,
       price_per_hour AS price,
       status,
-      'TP.HCM' AS location
+      COALESCE(location, 'TP.HCM') AS location,
+      description,
+      field_type
     FROM fields
     WHERE id = ?
   `;
@@ -448,10 +470,10 @@ app.get("/fields/:id", (req, res) => {
   });
 });
 
-// ===== LẤY DANH SÁCH BOOKING =====
+// ===== LẤY DANH SÁCH BOOKING (user xem của mình) =====
 app.get("/bookings", authenticateToken, (req, res) => {
   const sql = `
-    SELECT 
+    SELECT
       b.id,
       b.user_id,
       b.field_id,
@@ -459,34 +481,30 @@ app.get("/bookings", authenticateToken, (req, res) => {
       b.start_time,
       b.end_time,
       b.status,
-      f.field_name AS field_name
+      COALESCE(b.deposit_status, 'unpaid') AS deposit_status,
+      COALESCE(b.deposit_amount, 0) AS deposit_amount,
+      f.field_name AS field_name,
+      u.username
     FROM booking b
     LEFT JOIN fields f ON b.field_id = f.id
-    ORDER BY b.id DESC
+    LEFT JOIN users  u ON b.user_id  = u.id
+    WHERE b.user_id = ?
+    ORDER BY b.booking_date DESC, b.id DESC
   `;
 
-  db.query(sql, (err, result) => {
+  db.query(sql, [req.user.id], (err, result) => {
     if (err) {
       console.log("Lỗi lấy bookings:", err);
       return res.status(500).json(err);
     }
-
-    if (req.user.role === "admin") {
-      return res.json(result);
-    }
-
-    const myBookings = result.filter(
-      (booking) => Number(booking.user_id) === Number(req.user.id)
-    );
-
-    res.json(myBookings);
+    res.json(result);
   });
 });
 
 // ===== LẤY DANH SÁCH BOOKING CHO ADMIN =====
 app.get("/admin/bookings", authenticateToken, requireAdmin, (req, res) => {
   const sql = `
-    SELECT 
+    SELECT
       b.id,
       b.user_id,
       b.field_id,
@@ -494,10 +512,14 @@ app.get("/admin/bookings", authenticateToken, requireAdmin, (req, res) => {
       b.start_time,
       b.end_time,
       b.status,
-      f.field_name AS field_name
+      COALESCE(b.deposit_status, 'unpaid') AS deposit_status,
+      COALESCE(b.deposit_amount, 0) AS deposit_amount,
+      f.field_name AS field_name,
+      u.username
     FROM booking b
     LEFT JOIN fields f ON b.field_id = f.id
-    ORDER BY b.id DESC
+    LEFT JOIN users  u ON b.user_id  = u.id
+    ORDER BY b.booking_date DESC, b.id DESC
   `;
 
   db.query(sql, (err, result) => {
@@ -635,7 +657,9 @@ app.get("/admin/fields", authenticateToken, requireAdmin, (req, res) => {
       field_name AS name,
       price_per_hour AS price,
       status,
-      'TP.HCM' AS location
+      COALESCE(location, 'TP.HCM') AS location,
+      description,
+      field_type
     FROM fields
     ORDER BY id DESC
   `;
@@ -649,26 +673,211 @@ app.get("/admin/fields", authenticateToken, requireAdmin, (req, res) => {
     res.json(result);
   });
 });
+
+// ===== THÊM SÂN MỚI =====
+app.post("/admin/fields", authenticateToken, requireAdmin, (req, res) => {
+  const { name, price, status, location, description, field_type } = req.body;
+
+  if (!name || !price) {
+    return res.status(400).json({ message: "Tên sân và giá là bắt buộc" });
+  }
+
+  const sql = `
+    INSERT INTO fields (field_name, price_per_hour, status, location, description, field_type)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `;
+
+  db.query(
+    sql,
+    [name, price, status || "available", location || "TP.HCM", description || null, field_type || "5v5"],
+    (err, result) => {
+      if (err) {
+        console.log("Lỗi thêm sân:", err);
+        return res.status(500).json({ message: "Không thể thêm sân bóng" });
+      }
+      res.json({ message: "Thêm sân thành công", fieldId: result.insertId });
+    }
+  );
+});
+
+// ===== CẬP NHẬT SÂN =====
+app.put("/admin/fields/:id", authenticateToken, requireAdmin, (req, res) => {
+  const fieldId = req.params.id;
+  const { name, price, status, location, description, field_type } = req.body;
+
+  if (!name || !price) {
+    return res.status(400).json({ message: "Tên sân và giá là bắt buộc" });
+  }
+
+  const sql = `
+    UPDATE fields
+    SET field_name = ?, price_per_hour = ?, status = ?, location = ?, description = ?, field_type = ?
+    WHERE id = ?
+  `;
+
+  db.query(
+    sql,
+    [name, price, status || "available", location || "TP.HCM", description || null, field_type || "5v5", fieldId],
+    (err, result) => {
+      if (err) {
+        console.log("Lỗi cập nhật sân:", err);
+        return res.status(500).json({ message: "Không thể cập nhật sân bóng" });
+      }
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ message: "Sân bóng không tồn tại" });
+      }
+      res.json({ message: "Cập nhật sân thành công" });
+    }
+  );
+});
+
+// ===== ĐỔI TRẠNG THÁI SÂN =====
+app.put("/admin/fields/:id/status", authenticateToken, requireAdmin, (req, res) => {
+  const fieldId = req.params.id;
+  const { status } = req.body;
+
+  const validStatuses = ["available", "occupied", "maintenance"];
+  if (!status || !validStatuses.includes(status)) {
+    return res.status(400).json({ message: "Trạng thái không hợp lệ" });
+  }
+
+  const sql = `UPDATE fields SET status = ? WHERE id = ?`;
+
+  db.query(sql, [status, fieldId], (err, result) => {
+    if (err) {
+      console.log("Lỗi đổi trạng thái sân:", err);
+      return res.status(500).json({ message: "Không thể cập nhật trạng thái sân" });
+    }
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: "Sân bóng không tồn tại" });
+    }
+    res.json({ message: "Cập nhật trạng thái thành công" });
+  });
+});
+
+// ===== XÓA SÂN =====
+app.delete("/admin/fields/:id", authenticateToken, requireAdmin, (req, res) => {
+  const fieldId = req.params.id;
+
+  const checkBookingSql = `SELECT id FROM booking WHERE field_id = ? LIMIT 1`;
+
+  db.query(checkBookingSql, [fieldId], (err, bookings) => {
+    if (err) {
+      console.log("Lỗi kiểm tra booking:", err);
+      return res.status(500).json({ message: "Lỗi kiểm tra booking" });
+    }
+    if (bookings.length > 0) {
+      return res.status(400).json({ message: "Không thể xóa sân đang có booking" });
+    }
+
+    const sql = `DELETE FROM fields WHERE id = ?`;
+    db.query(sql, [fieldId], (err, result) => {
+      if (err) {
+        console.log("Lỗi xóa sân:", err);
+        return res.status(500).json({ message: "Không thể xóa sân bóng" });
+      }
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ message: "Sân bóng không tồn tại" });
+      }
+      res.json({ message: "Xóa sân thành công" });
+    });
+  });
+});
+
+// ===== DUYỆT / TỪ CHỐI BOOKING =====
+app.put("/admin/bookings/:id/status", authenticateToken, requireAdmin, (req, res) => {
+  const bookingId = req.params.id;
+  const { status } = req.body;
+
+  const validStatuses = ["pending", "confirmed", "cancelled", "no_show"];
+  if (!status || !validStatuses.includes(status)) {
+    return res.status(400).json({ message: "Trạng thái không hợp lệ" });
+  }
+
+  const sql = `UPDATE booking SET status = ? WHERE id = ?`;
+
+  db.query(sql, [status, bookingId], (err, result) => {
+    if (err) {
+      console.log("Lỗi cập nhật trạng thái booking:", err);
+      return res.status(500).json({ message: "Không thể cập nhật trạng thái booking" });
+    }
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: "Booking không tồn tại" });
+    }
+    res.json({ message: "Cập nhật trạng thái booking thành công" });
+  });
+});
+
+// ===== CẬP NHẬT TRẠNG THÁI CỌC BOOKING =====
+app.put("/admin/bookings/:id/deposit", authenticateToken, requireAdmin, (req, res) => {
+  const bookingId = req.params.id;
+  const { deposit_status } = req.body;
+
+  const validStatuses = ["unpaid", "paid", "refunded", "forfeited"];
+  if (!deposit_status || !validStatuses.includes(deposit_status)) {
+    return res.status(400).json({ message: "Trạng thái cọc không hợp lệ" });
+  }
+
+  const sql = `UPDATE booking SET deposit_status = ? WHERE id = ?`;
+
+  db.query(sql, [deposit_status, bookingId], (err, result) => {
+    if (err) {
+      console.log("Lỗi cập nhật deposit_status:", err);
+      return res.status(500).json({ message: "Không thể cập nhật trạng thái cọc" });
+    }
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: "Booking không tồn tại" });
+    }
+    res.json({ message: "Cập nhật trạng thái cọc thành công" });
+  });
+});
+
+// ===== CẬP NHẬT TRẠNG THÁI TRẬN ĐẤU =====
+app.put("/admin/matches/:id/status", authenticateToken, requireAdmin, (req, res) => {
+  const matchId = req.params.id;
+  const { status } = req.body;
+
+  const validStatuses = ["open", "full", "completed", "cancelled"];
+  if (!status || !validStatuses.includes(status)) {
+    return res.status(400).json({ message: "Trạng thái không hợp lệ" });
+  }
+
+  const sql = `UPDATE matches SET status = ? WHERE id = ?`;
+
+  db.query(sql, [status, matchId], (err, result) => {
+    if (err) {
+      console.log("Lỗi cập nhật trạng thái trận:", err);
+      return res.status(500).json({ message: "Không thể cập nhật trạng thái trận" });
+    }
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: "Trận đấu không tồn tại" });
+    }
+    res.json({ message: "Cập nhật trạng thái trận thành công" });
+  });
+});
+
 // ===== LẤY DANH SÁCH MATCHES CHO ADMIN =====
 app.get("/admin/matches", authenticateToken, requireAdmin, (req, res) => {
   const sql = `
     SELECT
       m.id,
       CONCAT('Trận #', m.id) AS title,
-      f.field_name AS location,
+      COALESCE(f.field_name, 'Chưa xác định') AS location,
       CONCAT(
-        DATE_FORMAT(b.booking_date, '%Y-%m-%d'),
+        DATE_FORMAT(COALESCE(b.booking_date, m.match_date), '%Y-%m-%d'),
         ' ',
-        TIME_FORMAT(b.start_time, '%H:%i')
+        TIME_FORMAT(COALESCE(b.start_time, '00:00:00'), '%H:%i')
       ) AS time,
-      10 AS max_players,
+      COALESCE(m.max_players, 10) AS max_players,
+      COALESCE(m.status, 'open') AS status,
       m.match_date,
       m.team1_id,
       m.team2_id,
-      m.booking_id
+      m.booking_id,
+      (SELECT COUNT(*) FROM match_players mp WHERE mp.match_id = m.id) AS current_players
     FROM matches m
     LEFT JOIN booking b ON m.booking_id = b.id
-    LEFT JOIN fields f ON b.field_id = f.id
+    LEFT JOIN fields  f ON b.field_id   = f.id
     ORDER BY m.id DESC
   `;
 
@@ -681,38 +890,7 @@ app.get("/admin/matches", authenticateToken, requireAdmin, (req, res) => {
     res.json(result);
   });
 });
- // ===== LẤY DANH SÁCH MATCHES CHO ADMIN =====
-app.get("/admin/matches", authenticateToken, requireAdmin, (req, res) => {
-  const sql = `
-    SELECT
-      m.id,
-      CONCAT('Trận #', m.id) AS title,
-      f.field_name AS location,
-      CONCAT(
-        DATE_FORMAT(b.booking_date, '%Y-%m-%d'),
-        ' ',
-        TIME_FORMAT(b.start_time, '%H:%i')
-      ) AS time,
-      10 AS max_players,
-      m.match_date,
-      m.team1_id,
-      m.team2_id,
-      m.booking_id
-    FROM matches m
-    LEFT JOIN booking b ON m.booking_id = b.id
-    LEFT JOIN fields f ON b.field_id = f.id
-    ORDER BY m.id DESC
-  `;
 
-  db.query(sql, (err, result) => {
-    if (err) {
-      console.log("Lỗi lấy matches cho admin:", err);
-      return res.status(500).json({ message: "Không thể lấy danh sách trận đấu" });
-    }
-
-    res.json(result);
-  });
-});
 // ===== CHẠY SERVER =====
 app.listen(3001, () => {
   console.log("🚀 Server running on port 3001");

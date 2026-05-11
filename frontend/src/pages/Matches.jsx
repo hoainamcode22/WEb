@@ -5,48 +5,67 @@ import Footer from "../components/Footer";
 import { getMatches } from "../services/api";
 import { formatDateTimeVN } from "../utils/format";
 
+const STATUS_FILTERS = [
+  { key: "all",       label: "Tất cả trận" },
+  { key: "open",      label: "🟢 Đang mở" },
+  { key: "full",      label: "👥 Đủ người" },
+  { key: "completed", label: "🏁 Kết thúc" },
+];
+
 function Matches() {
-  const [matches, setMatches] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
-  const [activeFilter, setActiveFilter] = useState("all");
+  const [matches,      setMatches]      = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState("");
+  const [search,       setSearch]       = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   useEffect(() => {
-    const fetchMatches = async () => {
-      try {
-        const data = await getMatches();
-        setMatches(data);
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchMatches();
+    getMatches()
+      .then(setMatches)
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
   }, []);
 
   const filteredMatches = useMemo(() => {
     let result = matches;
 
+    if (statusFilter !== "all") {
+      result = result.filter(
+        (m) => String(m.status || "open").toLowerCase() === statusFilter
+      );
+    }
+
     if (search.trim()) {
       const q = search.toLowerCase();
       result = result.filter(
         (m) =>
-          m.title?.toLowerCase().includes(q) ||
-          m.location?.toLowerCase().includes(q)
+          (m.title    || "").toLowerCase().includes(q) ||
+          (m.location || "").toLowerCase().includes(q)
       );
     }
 
     return result;
-  }, [matches, search]);
+  }, [matches, search, statusFilter]);
 
-  const filters = [
-    { key: "all", label: "Tất cả trận" },
-    { key: "open", label: "Đang mở" },
-    { key: "5v5", label: "5 vs 5" },
-    { key: "evening", label: "Buổi tối" },
-  ];
+  const stats = useMemo(() => ({
+    total:     matches.length,
+    open:      matches.filter((m) => String(m.status || "open") === "open").length,
+    full:      matches.filter((m) => m.status === "full").length,
+    completed: matches.filter((m) => m.status === "completed").length,
+  }), [matches]);
+
+  const getStatusInfo = (status) => {
+    if (status === "full")      return { text: "Đã đủ người", dot: "#f59e0b", badge: "FULL" };
+    if (status === "completed") return { text: "Đã kết thúc", dot: "#6b7280", badge: "DONE" };
+    if (status === "cancelled") return { text: "Đã hủy",      dot: "#ef4444", badge: "HỦY" };
+    return { text: "Đang tuyển",  dot: "#22c55e", badge: "OPEN" };
+  };
+
+  const playerPercent = (current, max) => {
+    const c = Number(current || 0);
+    const m = Number(max || 10);
+    return Math.min(Math.round((c / m) * 100), 100);
+  };
 
   return (
     <div>
@@ -61,8 +80,9 @@ function Matches() {
               Tìm trận phù hợp để tham gia
             </h1>
             <p className="section-subtitle">
-              Xem các trận đang mở đăng ký, chọn địa điểm phù hợp và tham gia
-              cùng cộng đồng bóng đá ngay hôm nay.
+              {!loading && matches.length > 0
+                ? `${stats.total} trận · ${stats.open} đang mở · ${stats.full} đã đủ người`
+                : "Xem các trận đang mở đăng ký và tham gia cộng đồng bóng đá."}
             </p>
           </div>
         </div>
@@ -90,11 +110,11 @@ function Matches() {
 
         {/* Filter Pills */}
         <div className="match-filter-row">
-          {filters.map((f) => (
+          {STATUS_FILTERS.map((f) => (
             <button
               key={f.key}
-              className={`match-filter-pill${activeFilter === f.key ? " active" : ""}`}
-              onClick={() => setActiveFilter(f.key)}
+              className={`match-filter-pill${statusFilter === f.key ? " active" : ""}`}
+              onClick={() => setStatusFilter(f.key)}
             >
               {f.label}
             </button>
@@ -105,7 +125,8 @@ function Matches() {
         {!loading && !error && (
           <div className="filter-status-row">
             <span className="filter-count-badge">
-              📋 {filteredMatches.length} trận {search ? `phù hợp với "${search}"` : "trong hệ thống"}
+              📋 {filteredMatches.length} trận{" "}
+              {search ? `phù hợp với "${search}"` : "trong hệ thống"}
             </span>
           </div>
         )}
@@ -117,21 +138,19 @@ function Matches() {
             <p>Đang tải danh sách trận đấu...</p>
           </div>
         )}
-
         {error && (
           <div className="alert-error" style={{ marginBottom: "20px" }}>
             <span>⚠️</span> {error}
           </div>
         )}
-
         {!loading && !error && filteredMatches.length === 0 && (
           <div className="empty-box" style={{ textAlign: "center", padding: "48px 24px" }}>
             <div style={{ fontSize: "48px", marginBottom: "14px" }}>⚽</div>
-            <h3 style={{ marginBottom: "8px", color: "#102418" }}>Không tìm thấy trận phù hợp</h3>
+            <h3 style={{ marginBottom: "8px" }}>Không tìm thấy trận phù hợp</h3>
             <p>
               {search
-                ? `Không có trận nào phù hợp với từ khóa "${search}". Thử tìm kiếm khác.`
-                : "Hiện chưa có trận nào đang mở. Quay lại sau nhé!"}
+                ? `Không có trận nào phù hợp với "${search}".`
+                : "Hiện chưa có trận nào. Quay lại sau nhé!"}
             </p>
           </div>
         )}
@@ -139,43 +158,77 @@ function Matches() {
         {/* Match Cards */}
         {!loading && !error && filteredMatches.length > 0 && (
           <div className="match-card-grid">
-            {filteredMatches.map((match, index) => (
-              <div
-                key={match.id}
-                className={`modern-match-card motion-delay-${(index % 5) + 1}`}
-              >
-                <div className="modern-match-image">
-                  <span className="modern-match-badge">OPEN MATCH</span>
-                  <span className="modern-match-level">Phong trào</span>
-                </div>
+            {filteredMatches.map((match, index) => {
+              const si      = getStatusInfo(match.status);
+              const current = Number(match.current_players || 0);
+              const max     = Number(match.max_players || 10);
+              const pct     = playerPercent(current, max);
+              const isFull  = match.status === "full" || current >= max;
 
-                <div className="modern-match-content">
-                  <h3>{match.title}</h3>
-                  <p className="modern-match-location">📍 {match.location}</p>
-
-                  <div className="modern-match-meta">
-                    <div>
-                      <span>THỜI GIAN</span>
-                      <strong>{formatDateTimeVN(match.time) || match.time}</strong>
-                    </div>
-                    <div>
-                      <span>SỨC CHỨA</span>
-                      <strong>{match.max_players} người</strong>
-                    </div>
+              return (
+                <div
+                  key={match.id}
+                  className={`modern-match-card motion-delay-${(index % 5) + 1}`}
+                >
+                  <div className="modern-match-image">
+                    <span className={`modern-match-badge${isFull ? " badge-full" : ""}`}>
+                      {si.badge}
+                    </span>
+                    <span className="modern-match-level">Phong trào</span>
                   </div>
 
-                  <div className="modern-match-footer">
-                    <div className="modern-match-status">
-                      <span className="status-dot"></span>
-                      Đang tuyển người
+                  <div className="modern-match-content">
+                    <h3>{match.title}</h3>
+                    <p className="modern-match-location">📍 {match.location || "—"}</p>
+
+                    <div className="modern-match-meta">
+                      <div>
+                        <span>THỜI GIAN</span>
+                        <strong>{formatDateTimeVN(match.time) || match.time || "—"}</strong>
+                      </div>
+                      <div>
+                        <span>SỐ NGƯỜI</span>
+                        <strong style={{ color: isFull ? "#f59e0b" : "#16944c" }}>
+                          {current}/{max}
+                        </strong>
+                      </div>
                     </div>
-                    <Link to={`/matches/${match.id}`}>
-                      <button className="modern-match-btn">Xem chi tiết</button>
-                    </Link>
+
+                    {/* Progress bar */}
+                    <div className="player-progress">
+                      <div
+                        className="player-progress-bar"
+                        style={{
+                          width: `${pct}%`,
+                          background: isFull
+                            ? "linear-gradient(90deg,#f59e0b,#d97706)"
+                            : "linear-gradient(90deg,#22c55e,#16944c)",
+                        }}
+                      />
+                    </div>
+
+                    <div className="modern-match-footer">
+                      <div className="modern-match-status">
+                        <span
+                          className="status-dot"
+                          style={{ background: si.dot }}
+                        />
+                        {si.text}
+                      </div>
+                      <Link to={`/matches/${match.id}`}>
+                        <button
+                          className="modern-match-btn"
+                          disabled={match.status === "cancelled"}
+                          style={match.status === "cancelled" ? { opacity: 0.5 } : {}}
+                        >
+                          {isFull ? "Xem chi tiết" : "Tham gia"}
+                        </button>
+                      </Link>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

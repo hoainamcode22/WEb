@@ -130,6 +130,32 @@ export const getAdminFields = async () => {
 
   return handleResponse(res, "Không lấy được danh sách sân bóng");
 };
+
+export const createField = async (fieldData) => {
+  const res = await fetch(`${BASE_URL}/admin/fields`, {
+    method: "POST",
+    headers: getAuthHeaders(true),
+    body: JSON.stringify(fieldData),
+  });
+  return handleResponse(res, "Thêm sân thất bại");
+};
+
+export const updateField = async (id, fieldData) => {
+  const res = await fetch(`${BASE_URL}/admin/fields/${id}`, {
+    method: "PUT",
+    headers: getAuthHeaders(true),
+    body: JSON.stringify(fieldData),
+  });
+  return handleResponse(res, "Cập nhật sân thất bại");
+};
+
+export const deleteField = async (id) => {
+  const res = await fetch(`${BASE_URL}/admin/fields/${id}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse(res, "Xóa sân thất bại");
+};
 export const getAdminMatches = async () => {
   const res = await fetch(`${BASE_URL}/admin/matches`, {
     headers: getAuthHeaders(),

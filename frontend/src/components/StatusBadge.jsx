@@ -16,6 +16,7 @@ const STATUS_MAP = {
 
   // Field status
   available:   { label: "Còn trống",    className: "status-badge status-available" },
+  occupied:    { label: "Đang dùng",    className: "status-badge status-full" },
   unavailable: { label: "Không dùng",   className: "status-badge status-cancelled" },
   maintenance: { label: "Bảo trì",      className: "status-badge status-maintenance" },
   inactive:    { label: "Ngừng hoạt động", className: "status-badge status-cancelled" },
